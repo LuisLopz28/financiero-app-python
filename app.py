@@ -3,6 +3,30 @@ import pandas as pd
 from datetime import datetime
 import io
 
+# Usuarios simulados (puedes cambiar esto a tu gusto)
+USUARIOS = {
+    "luis": "1234",
+    "admin": "adminpass"
+}
+
+def login():
+    if "autenticado" not in st.session_state:
+        st.session_state.autenticado = False
+
+    if not st.session_state.autenticado:
+        st.title("🔐 Iniciar sesión")
+        usuario = st.text_input("Usuario")
+        contraseña = st.text_input("Contraseña", type="password")
+        if st.button("Iniciar sesión"):
+            if usuario in USUARIOS and USUARIOS[usuario] == contraseña:
+                st.session_state.autenticado = True
+                st.experimental_rerun()
+            else:
+                st.error("❌ Usuario o contraseña incorrectos")
+        st.stop()
+
+login()
+
 # --- Configuración de página ---
 st.set_page_config(page_title="Análisis Financiero", layout="wide")
 
