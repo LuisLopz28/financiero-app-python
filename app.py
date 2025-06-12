@@ -1,52 +1,106 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from utils import cargar_datos, procesar_datos, usuarios, verificar_login
+import io
 
-# --- CONFIGURACIÓN GENERAL ---
-st.set_page_config(page_title="App Financiera", layout="wide", page_icon="💰")
+# --- Configuración de página ---
+st.set_page_config(page_title="Análisis Financiero", layout="wide")
 
-# --- LOGIN ---
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
+st.title("📊 Análisis de Estados Financieros")
+st.markdown("Carga un archivo financiero anual para procesarlo con las tablas auxiliares integradas.")
 
-if not st.session_state.autenticado:
-    st.title("🔐 Inicio de Sesión")
+# --- Archivos auxiliares por defecto ---
+ARCHIVO_CRUZAR = "Cruzar - Tabla Auxiliar.xlsx"
+ARCHIVO_AGIL = "Agil - Tabla Auxiliar.xlsx"
 
-    usuario = st.text_input("Usuario")
-    password = st.text_input("Contraseña", type="password")
-    if st.button("Iniciar Sesión"):
-        if verificar_login(usuario, password):
-            st.session_state.autenticado = True
-            st.success("Inicio de sesión exitoso 🎉")
-            st.rerun()
-        else:
-            st.error("Usuario o contraseña incorrectos")
-    st.stop()
+# --- Cargar auxiliares al iniciar ---
+@st.cache_data
+def cargar_tablas_auxiliares():
+    cruzar_df = pd.read_excel(ARCHIVO_CRUZAR)
+    agil_df = pd.read_excel(ARCHIVO_AGIL)
+    return cruzar_df, agil_df
 
-# --- INTERFAZ PRINCIPAL ---
-st.markdown("<h1 style='color:#00b4d8;'>📊 Análisis de Estado Financiero</h1>", unsafe_allow_html=True)
+cruzar_df, agil_df = cargar_tablas_auxiliares()
 
-with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Finance_icon.svg/1200px-Finance_icon.svg.png", width=100)
-    st.header("⚙️ Parámetros")
-    archivo_financiero = st.file_uploader("Estado Financiero", type="xlsx")
-    archivo_cruzar = st.file_uploader("Cruzar", type="xlsx")
-    archivo_agil = st.file_uploader("Agil", type="xlsx")
+# --- Subir archivo financiero ---
+archivo_financiero = st.file_uploader("📤 Subir archivo de estado financiero", type=["xlsx"])
 
-if archivo_financiero and archivo_cruzar and archivo_agil:
-    with st.spinner("Procesando archivos..."):
-        cruzar_df, agil_df, datos_dict, anio = cargar_datos(archivo_cruzar, archivo_agil, archivo_financiero)
-        df_final = procesar_datos(cruzar_df, agil_df, datos_dict, anio)
-        st.success(f"Datos procesados. Total registros: {len(df_final)}")
+if archivo_financiero:
+    ANIO = archivo_financiero.name.split('.')[0][-4:]
+    xls = pd.ExcelFile(archivo_financiero)
 
-        st.dataframe(df_final, use_container_width=True)
+    # Filtrar hojas relevantes
+    nombres_hojas = cruzar_df["Name"].dropna().unique()
+    datos_dict = {hoja: xls.parse(hoja, header=None) for hoja in nombres_hojas if hoja in xls.sheet_names}
 
-        st.download_button(
-            "📥 Descargar Excel",
-            df_final.to_excel(index=False, engine='openpyxl'),
-            file_name="ResultadoFinanciero.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-else:
-    st.info("🔍 Carga los tres archivos para iniciar el análisis.")
+    def es_mes(col):
+        col = str(col).lower()
+        meses = {'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+                 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'}
+        return any(m in col for m in meses) and 'total' not in col
+
+    def mes_a_num(col):
+        meses = {'enero':1, 'febrero':2, 'marzo':3, 'abril':4, 'mayo':5, 'junio':6,
+                 'julio':7, 'agosto':8, 'septiembre':9, 'octubre':10, 'noviembre':11, 'diciembre':12}
+        col = str(col).lower()
+        return next((v for k, v in meses.items() if k in col), None)
+
+    resultados = []
+
+    for hoja, df in datos_dict.items():
+        if df.empty:
+            continue
+
+        header_row_idx = df.first_valid_index()
+        columnas = df.iloc[header_row_idx].fillna("").astype(str).tolist()
+        agil_sub = agil_df[agil_df["Linea"].notna()]
+
+        for _, agil in agil_sub.iterrows():
+            try:
+                linea_excel = int(agil["Linea"])
+                fila = df.iloc[linea_excel - 1]
+            except:
+                continue
+
+            for i, valor in enumerate(fila[1:], start=1):
+                col_nombre = columnas[i] if i < len(columnas) else f"Col_{i}"
+                if es_mes(col_nombre):
+                    if pd.notna(valor) and str(valor).strip():
+                        mes_num = mes_a_num(col_nombre)
+                        resultados.append({
+                            "Name": hoja,
+                            "Item": agil['Item'],
+                            "Sub Item": agil['Sub Item'],
+                            "Relacion": agil['Relacion'],
+                            "Nombre Item": agil['Nombre Item'],
+                            "Mes": col_nombre.strip(),
+                            "Mes_Num": mes_num,
+                            "Año": ANIO,
+                            "Fecha": datetime(int(ANIO), mes_num, 1) if mes_num else None,
+                            "Valor": valor
+                        })
+
+    df_resultados = pd.DataFrame(resultados)
+    df_resultados["Valor"] = pd.to_numeric(df_resultados["Valor"], errors="coerce")
+
+    df_final = (
+        df_resultados
+        .merge(cruzar_df, on="Name", how="left")
+        .drop_duplicates()
+        [["Pais", "Departamento", "Proyecto", "Actividad", "Name", "Item",
+          "Sub Item", "Relacion", "Nombre Item", "Año", "Mes", "Mes_Num", "Fecha", "Valor"]]
+    )
+
+    # Mostrar tabla
+    st.success(f"✅ Procesamiento completo. Registros: {len(df_final)}")
+    st.dataframe(df_final, use_container_width=True)
+
+    # Botón para descargar Excel
+    output = io.BytesIO()
+    df_final.to_excel(output, index=False, engine='openpyxl')
+    st.download_button(
+        label="📥 Descargar Excel",
+        data=output.getvalue(),
+        file_name="DataFinanciero.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
