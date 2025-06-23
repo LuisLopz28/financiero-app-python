@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 import io
 
-# Usuarios simulados (puedes cambiar esto a tu gusto)
+# Usuarios simulados (puedes cambiar esto a tu gusto) 
 USUARIOS = {
     "luis": "1234",
     "admin": "adminpass"
